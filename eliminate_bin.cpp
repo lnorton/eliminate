@@ -30,40 +30,6 @@
 #include "eliminate.h"
 
 
-struct EliminateOptions
-{
-    char *pszSrcFilename;
-    char *pszSrcLayerName;
-    char *pszDstFilename;
-    char *pszDstLayerName;
-    char *pszFormat;
-
-    EliminateOptions() :
-        pszSrcFilename(nullptr), pszSrcLayerName(nullptr),
-        pszDstFilename(nullptr), pszDstLayerName(nullptr),
-        pszFormat(nullptr) {}
-
-    virtual ~EliminateOptions()
-    {
-        CPLFree(pszSrcFilename);
-        CPLFree(pszSrcLayerName);
-        CPLFree(pszDstFilename);
-        CPLFree(pszDstLayerName);
-        CPLFree(pszFormat);
-    }
-};
-
-static EliminateOptions *EliminateOptionsNew()
-{
-    EliminateOptions *psOptions = new EliminateOptions;
-    return psOptions;
-}
-
-static void EliminateOptionsFree(EliminateOptions *psOptions)
-{
-    delete psOptions;
-}
-
 static int EliminatePolygonsCmdLineProcessor(int nArgc, char **papszArgv, EliminateOptions *psOptions)
 {
     const char *pszSrcFilename = nullptr;
@@ -118,47 +84,9 @@ static int EliminatePolygonsCmdLineProcessor(int nArgc, char **papszArgv, Elimin
         }
     }
 
+    psOptions->pszWhere = CPLStrdup("OGR_GEOM_AREA < 0.005");
+
     return EXIT_SUCCESS;
-}
-
-static int EliminatePolygonsBinary(EliminateOptions *psOptions)
-{
-    int nMajor, nMinor, nPatch;
-    bool bHaveGEOS = OGRGetGEOSVersion(&nMajor, &nMinor, &nPatch);
-
-    if (!bHaveGEOS)
-    {
-        CPLError(CE_Failure, CPLE_AppDefined, "Installed GDAL library does not support GEOS.");
-        return EXIT_FAILURE;
-    }
-
-    OGRSFDriverH hDriver = OGRGetDriverByName(psOptions->pszFormat);
-    if (hDriver == nullptr)
-    {
-        CPLError(CE_Failure, CPLE_AppDefined, "Unable to find format driver named %s.", psOptions->pszFormat);
-        return EXIT_FAILURE;
-    }
-
-    int nExitStatus = EXIT_FAILURE;
-
-    int nFlags = GDAL_OF_VECTOR | GDAL_OF_READONLY | GDAL_OF_VERBOSE_ERROR;
-    GDALDatasetH hSrcDS = GDALOpenEx(psOptions->pszSrcFilename, nFlags, nullptr, nullptr, nullptr);
-    if (hSrcDS != nullptr)
-    {
-        GDALDatasetH hDstDS = reinterpret_cast<GDALDatasetH>(OGR_Dr_CreateDataSource(hDriver, psOptions->pszDstFilename, /* DSCO */ nullptr));
-        if (hDstDS != nullptr)
-        {
-            OGRErr eErr = EliminatePolygons(hSrcDS, psOptions->pszSrcLayerName, hDstDS,  psOptions->pszDstLayerName);
-            if (eErr == OGRERR_NONE)
-            {
-                nExitStatus = EXIT_SUCCESS;
-            }
-            GDALClose(hDstDS);
-        }
-        GDALClose(hSrcDS);
-    }
-
-    return nExitStatus;
 }
 
 static void PrintUsage(const char *pszErrorMessage = nullptr)
@@ -193,7 +121,8 @@ MAIN_START(argc, argv)
         }
         else
         {
-            nExitStatus = EliminatePolygonsBinary(psOptions);
+            OGRErr eErr = EliminatePolygonsWithOptions(psOptions);
+            nExitStatus = eErr == OGRERR_NONE ? EXIT_SUCCESS : EXIT_FAILURE;
         }
         EliminateOptionsFree(psOptions);
     }

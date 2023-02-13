@@ -71,7 +71,7 @@ static OGRwkbGeometryType MultiGeomTypeToSingle(OGRwkbGeometryType eType)
     }
 }
 
-static OGRErr CopyFeature(OGRLayer *poDstLayer, const OGRFeature *poSrcFeature, const OGRGeometry *poGeometry)
+OGRErr CopyFeature(OGRLayer *poDstLayer, const OGRFeature *poSrcFeature, const OGRGeometry *poGeometry)
 {
     OGRFeature oDstFeature(poDstLayer->GetLayerDefn());
     for (int iField = 0, nCount = poDstLayer->GetLayerDefn()->GetFieldCount(); iField < nCount; iField++)
@@ -100,7 +100,6 @@ OGRErr Explode(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hD
         else
         {
             poSrcLayer = poSrcDS->GetLayer(0);
-            pszSrcLayerName = poSrcLayer->GetName();
         }
     }
     else
@@ -113,22 +112,7 @@ OGRErr Explode(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hD
         }
     }
 
-    if (pszDstLayerName == nullptr)
-    {
-        // TODO: Generate unique name if source and destination are the same.
-        pszDstLayerName = poSrcLayer->GetName();
-    }
-
-    OGRLayer *poDstLayer = poDstDS->CreateLayer(pszDstLayerName, poSrcLayer->GetSpatialRef(), wkbPolygon);
-
     OGRFeatureDefn *poSrcLayerDefn = poSrcLayer->GetLayerDefn();
-
-    for (int iField = 0, nCount = poSrcLayerDefn->GetFieldCount(); iField < nCount; iField++)
-    {
-        OGRFieldDefn *poSrcFieldDefn = poSrcLayerDefn->GetFieldDefn(iField);
-        poDstLayer->CreateField(poSrcFieldDefn);
-    }
-
     int nGeomFieldCount = poSrcLayerDefn->GetGeomFieldCount();
     if (nGeomFieldCount == 0)
     {
@@ -139,6 +123,22 @@ OGRErr Explode(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hD
     {
         CPLError(CE_Failure, CPLE_AppDefined, "Multiple geometry columns not supported.");
         return OGRERR_UNSUPPORTED_OPERATION;
+    }
+
+    if (pszDstLayerName == nullptr)
+    {
+        // TODO: Generate unique name if source and destination are the same.
+        pszDstLayerName = poSrcLayer->GetName();
+    }
+
+    // TODO: Ownership of layer?
+
+    OGRLayer *poDstLayer = poDstDS->CreateLayer(pszDstLayerName, poSrcLayer->GetSpatialRef(), wkbPolygon);
+
+    for (int iField = 0, nCount = poSrcLayerDefn->GetFieldCount(); iField < nCount; iField++)
+    {
+        OGRFieldDefn *poSrcFieldDefn = poSrcLayerDefn->GetFieldDefn(iField);
+        poDstLayer->CreateField(poSrcFieldDefn);
     }
 
     OGRGeomFieldDefn *poSrcFieldDefn = poSrcLayerDefn->GetGeomFieldDefn(0);
