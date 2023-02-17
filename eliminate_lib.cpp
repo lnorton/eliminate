@@ -40,7 +40,15 @@ extern OGRErr CopyFeature(OGRLayer *poDstLayer, const OGRFeature *poSrcFeature, 
 class FeatureCreature
 {
 public:
-    typedef std::pair<FeatureCreature *, double> neighbor_t;
+    struct neighbor_t
+    {
+        FeatureCreature *poCreature;
+        double dfLength;
+        void addCreatureToMerge(FeatureCreature *poCreatureToMerge)
+        {
+            poCreature->addCreatureToMerge(poCreatureToMerge);
+        }
+    };
     typedef bool (*neighbor_comp_t)(const FeatureCreature::neighbor_t &, const FeatureCreature::neighbor_t &);
 
 protected:
@@ -49,9 +57,9 @@ protected:
     GEOSGeometry* m_poGEOSGeometry;
     const GEOSPreparedGeometry *m_poGEOSPreparedGeometry;
     double m_dfArea;
-    std::list<neighbor_t> m_listNeighbors;
+    std::list<neighbor_t> m_lstNeighbors;
     neighbor_t *m_poSmallestNeighbor, *m_poLargestNeighbor, *m_poLongestNeighbor;
-    std::list<FeatureCreature *> m_listNeighborsToMerge;
+    std::list<FeatureCreature *> m_lstpoCreaturesToMerge;
 
 public:
     FeatureCreature(OGRFeatureUniquePtr poFeature, GEOSContextHandle_t hGEOSCtxt) :
@@ -168,14 +176,14 @@ public:
             double dfLength = 0.0;
             if (1 == GEOSLength_r(m_hGEOSContext, poIntersection, &dfLength))
             {
-                m_listNeighbors.push_back(std::make_pair(poNeighbor, dfLength));
+                m_lstNeighbors.push_back({poNeighbor, dfLength});
             }
             else
             {
                 char *type = GEOSGeomType_r(m_hGEOSContext, poIntersection);
                 CPLError(CE_Warning, CPLE_AppDefined, "Failed length calculation on boundary of type %s.", type);
                 GEOSFree_r(m_hGEOSContext, type);
-                m_listNeighbors.push_back(std::make_pair(poNeighbor, 0.0));
+                m_lstNeighbors.push_back({poNeighbor, 0.0});
             }
 
             GEOSGeom_destroy(poIntersection);
@@ -186,15 +194,15 @@ public:
 
     neighbor_t *find_neighbor(neighbor_comp_t comp)
     {
-        auto itr = std::min_element(m_listNeighbors.begin(), m_listNeighbors.end(), comp);
-        return itr != m_listNeighbors.end() ? &*itr : nullptr;
+        auto itr = std::min_element(m_lstNeighbors.begin(), m_lstNeighbors.end(), comp);
+        return itr != m_lstNeighbors.end() ? &*itr : nullptr;
     }
 
     neighbor_t *smallestNeighbor()
     {
         if (m_poSmallestNeighbor == nullptr)
         {
-            auto smaller = [](const neighbor_t &a, const neighbor_t &b) { return a.first->area() < b.first->area(); };
+            auto smaller = [](const neighbor_t &a, const neighbor_t &b) { return a.poCreature->area() < b.poCreature->area(); };
             m_poSmallestNeighbor = find_neighbor(smaller);
         }
         return m_poSmallestNeighbor;
@@ -204,7 +212,7 @@ public:
     {
         if (m_poLargestNeighbor == nullptr)
         {
-            auto bigger = [](const neighbor_t &a, const neighbor_t &b) { return a.first->area() >= b.first->area(); };
+            auto bigger = [](const neighbor_t &a, const neighbor_t &b) { return a.poCreature->area() >= b.poCreature->area(); };
             m_poLargestNeighbor = find_neighbor(bigger);
         }
         return m_poLargestNeighbor;
@@ -214,30 +222,27 @@ public:
     {
         if (m_poLongestNeighbor == nullptr)
         {
-            auto longer = [](const neighbor_t &a, const neighbor_t &b) { return a.second >= b.second; };
+            auto longer = [](const neighbor_t &a, const neighbor_t &b) { return a.dfLength >= b.dfLength; };
             m_poLongestNeighbor = find_neighbor(longer);
         }
         return m_poLongestNeighbor;
     }
 
-    void addNeighborToMerge(FeatureCreature *poNeighbor)
+    void addCreatureToMerge(FeatureCreature *poCreature)
     {
-        m_listNeighborsToMerge.push_back(poNeighbor);
+        m_lstpoCreaturesToMerge.push_back(poCreature);
     }
 
-    std::list<FeatureCreature *> collectNeighborsToMerge() const
+    std::list<FeatureCreature *> allCreaturesToMerge() const
     {
-        std::list<FeatureCreature *> listAllNeighborsToMerge;
-        for (auto poNeighbor : m_listNeighborsToMerge)
+        std::list<FeatureCreature *> lstpoAllCreaturesToMerge;
+        for (auto poCreature : m_lstpoCreaturesToMerge)
         {
-            listAllNeighborsToMerge.push_back(poNeighbor);
-            std::list<FeatureCreature *> listNeighborsNeighbors = poNeighbor->collectNeighborsToMerge();
-            for (auto poNeighborsNeighbor : listNeighborsNeighbors)
-            {
-                listAllNeighborsToMerge.push_back(poNeighborsNeighbor);
-            }
+            lstpoAllCreaturesToMerge.push_back(poCreature);
+            std::list<FeatureCreature *> lstpoCreaturesCreatures = poCreature->allCreaturesToMerge();
+            lstpoAllCreaturesToMerge.insert(lstpoAllCreaturesToMerge.end(), lstpoCreaturesCreatures.begin(), lstpoCreaturesCreatures.end());
         }
-        return listAllNeighborsToMerge;
+        return lstpoAllCreaturesToMerge;
     }
 };
 
@@ -386,7 +391,7 @@ OGRErr EliminatePolygonsWithOptionsEx(GDALDatasetH hSrcDS, const char *pszSrcLay
     {
         CPLString osWhere = psOptions->pszWhere;
 
-        // Sigh... there seems to be no way to force it into the OGRSQL dialect,
+        // There seems to be no way to force it into the OGRSQL dialect,
         // so kludge the where clause to keep it from blowing up.
         //
         CPLString osDriverName = poSrcDS->GetDriverName();
@@ -457,7 +462,7 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
     // Eliminate the features in the order they're given, since it
     // may affect the selection of the feature each is merged with.
     //
-    std::list<GIntBig> listFIDsToEliminate;
+    std::list<GIntBig> lstFIDsToEliminate;
     std::unordered_set<GIntBig> setFIDsToEliminate;
 
     for (int i = 0, n = CSLCount(papszEliminateFIDs); i < n; i++)
@@ -467,21 +472,21 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
         if (nFID != OGRNullFID && setFIDsToEliminate.find(nFID) == setFIDsToEliminate.end())
         {
             setFIDsToEliminate.insert(nFID);
-            listFIDsToEliminate.push_back(nFID);
+            lstFIDsToEliminate.push_back(nFID);
         }
     }
 
     GEOSContextHandle_t hGEOSCtxt = OGRGeometry::createGEOSContext();
     GEOSSTRtree *poSTRTree = GEOSSTRtree_create_r(hGEOSCtxt, 10);
 
-    std::list<FeatureCreature> listFeatures;
-    std::list<FeatureCreature *> listpoFeaturesToKeep;
-    std::list<FeatureCreature *> listpoFeaturesToEliminate;
+    std::list<FeatureCreature> lstFeatures;
+    std::list<FeatureCreature *> lstpoFeaturesToKeep;
+    std::list<FeatureCreature *> lstpoFeaturesToEliminate;
 
     for(auto &poFeature : poSrcLayer)
     {
-        listFeatures.emplace_back(std::move(poFeature), hGEOSCtxt);
-        FeatureCreature &creature = listFeatures.back();
+        lstFeatures.emplace_back(std::move(poFeature), hGEOSCtxt);
+        FeatureCreature &creature = lstFeatures.back();
 
         OGRErr eErr = creature.initGeometry();
         if (eErr != OGRERR_NONE)
@@ -500,11 +505,11 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
             }
 
             setFIDsToEliminate.erase(itr);
-            listpoFeaturesToEliminate.push_back(&creature);
+            lstpoFeaturesToEliminate.push_back(&creature);
         }
         else
         {
-            listpoFeaturesToKeep.push_back(&creature);
+            lstpoFeaturesToKeep.push_back(&creature);
         }
 
         GEOSSTRtree_insert_r(hGEOSCtxt, poSTRTree, creature.geometry(), &creature);
@@ -515,31 +520,35 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
         CPLError(CE_Warning, CPLE_AppDefined, "%lu selected features not found in source layer!", setFIDsToEliminate.size());
     }
 
-    for(auto poCreature : listpoFeaturesToEliminate)
+    for(auto poCreature : lstpoFeaturesToEliminate)
     {
-        std::list<FeatureCreature *> neighbors;
+        std::list<FeatureCreature *> lstpoNeighbors;
 
-        typedef std::pair<FeatureCreature *, std::list<FeatureCreature *> *> capture_t;
-        capture_t capture = std::make_pair(poCreature, &neighbors);
+        struct capture_t
+        {
+            FeatureCreature *poCreature;
+            std::list<FeatureCreature *> *plstpoNeighbors;
+        };
+        capture_t capture = {poCreature, &lstpoNeighbors};
 
         auto callback = [](void *poItem, void *poUserData) {
             auto poNeighbor = static_cast<FeatureCreature *>(poItem);
             auto poCapture = static_cast<capture_t *>(poUserData);
-            if (poCapture->first != poNeighbor)
+            if (poCapture->poCreature != poNeighbor)
             {
-                poCapture->second->push_back(poNeighbor);
+                poCapture->plstpoNeighbors->push_back(poNeighbor);
             }
         };
 
         GEOSSTRtree_query_r(hGEOSCtxt, poSTRTree, poCreature->geometry(), callback, &capture);
 
-        if (neighbors.size() == 0)
+        if (lstpoNeighbors.size() == 0)
         {
             CPLError(CE_Warning, CPLE_AppDefined, "No neighbors?");
             continue;
         }
 
-        for (auto poNeighbor : neighbors)
+        for (auto poNeighbor : lstpoNeighbors)
         {
             poCreature->addNeighborIfTouching(poNeighbor);
         }
@@ -552,19 +561,19 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
             continue;
         }
 
-        poNeighbor->first->addNeighborToMerge(poCreature);
+        poNeighbor->addCreatureToMerge(poCreature);
     }
 
     const bool bUseGEOSGeometries = true;
 
-    for(auto poCreature : listpoFeaturesToKeep)
+    for(auto poCreature : lstpoFeaturesToKeep)
     {
         const OGRFeature *poFeature = poCreature->feature();
         const OGRGeometry *poGeometry = poFeature->GetGeometryRef();
-        std::list<FeatureCreature *> listNeighborsToMerge = poCreature->collectNeighborsToMerge();
+        std::list<FeatureCreature *> lstpoCreaturesToMerge = poCreature->allCreaturesToMerge();
         OGRErr eErr;
 
-        if (listNeighborsToMerge.empty())
+        if (lstpoCreaturesToMerge.empty())
         {
             eErr = CopyFeature(poDstLayer, poFeature, poGeometry);
         }
@@ -576,9 +585,9 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
                 // Clone the geometries because the collection assumes ownership.
                 std::vector<GEOSGeometry *> vecGeometries;
                 vecGeometries.push_back(GEOSGeom_clone_r(hGEOSCtxt, poCreature->geometry()));
-                for (auto poNeighbor : listNeighborsToMerge)
+                for (auto poCreatureToMerge : lstpoCreaturesToMerge)
                 {
-                    vecGeometries.push_back(GEOSGeom_clone_r(hGEOSCtxt, poNeighbor->geometry()));
+                    vecGeometries.push_back(GEOSGeom_clone_r(hGEOSCtxt, poCreatureToMerge->geometry()));
                 }
                 GEOSGeometry *poGEOSGeometryCollection = GEOSGeom_createCollection_r(hGEOSCtxt, GEOS_MULTIPOLYGON, vecGeometries.data(), vecGeometries.size());
                 GEOSGeometry *poGEOSCombinedGeometry = GEOSUnaryUnion_r(hGEOSCtxt, poGEOSGeometryCollection);
@@ -590,9 +599,9 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
             else
             {
                 poCombinedGeometry.reset(poGeometry->clone());
-                for (auto poNeighbor : listNeighborsToMerge)
+                for (auto poCreatureToMerge : lstpoCreaturesToMerge)
                 {
-                    poCombinedGeometry.reset(poCombinedGeometry->Union(poNeighbor->feature()->GetGeometryRef()));
+                    poCombinedGeometry.reset(poCombinedGeometry->Union(poCreatureToMerge->feature()->GetGeometryRef()));
                 }
             }
             eErr = CopyFeature(poDstLayer, poFeature, poCombinedGeometry.get());
@@ -608,7 +617,7 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
     // destroyed before the feature nodes, and the context last of all.
     //
     GEOSSTRtree_destroy_r(hGEOSCtxt, poSTRTree);
-    listFeatures.clear();
+    lstFeatures.clear();
     OGRGeometry::freeGEOSContext(hGEOSCtxt);
 
     return OGRERR_NONE;
