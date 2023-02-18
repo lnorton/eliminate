@@ -22,6 +22,7 @@
  ****************************************************************************/
 
 #include <iostream>
+#include <vector>
 #include <list>
 #include <unordered_set>
 #include <algorithm>
@@ -36,37 +37,37 @@
 
 extern OGRErr CopyFeature(OGRLayer *poDstLayer, const OGRFeature *poSrcFeature, const OGRGeometry *poGeometry);
 
-
 class FeatureCreature
 {
 public:
     struct neighbor_t
     {
         FeatureCreature *poCreature;
-        double dfLength;
+        double dfBoundaryLength;
         void addCreatureToMerge(FeatureCreature *poCreatureToMerge)
         {
             poCreature->addCreatureToMerge(poCreatureToMerge);
         }
+        static bool larger(const neighbor_t &a, const neighbor_t &b) { return a.poCreature->area() >= b.poCreature->area(); };
+        static bool smaller(const neighbor_t &a, const neighbor_t &b) { return a.poCreature->area() < b.poCreature->area(); };
+        static bool longer(const neighbor_t &a, const neighbor_t &b) { return a.dfBoundaryLength >= b.dfBoundaryLength; };
+        typedef bool (*comp_t)(const neighbor_t &, const neighbor_t &);
     };
-    typedef bool (*neighbor_comp_t)(const FeatureCreature::neighbor_t &, const FeatureCreature::neighbor_t &);
 
-protected:
+private:
     OGRFeatureUniquePtr m_poFeature;
     GEOSContextHandle_t m_hGEOSContext;
     GEOSGeometry* m_poGEOSGeometry;
     const GEOSPreparedGeometry *m_poGEOSPreparedGeometry;
     double m_dfArea;
     std::list<neighbor_t> m_lstNeighbors;
-    neighbor_t *m_poSmallestNeighbor, *m_poLargestNeighbor, *m_poLongestNeighbor;
     std::list<FeatureCreature *> m_lstpoCreaturesToMerge;
 
 public:
     FeatureCreature(OGRFeatureUniquePtr poFeature, GEOSContextHandle_t hGEOSCtxt) :
         m_poFeature(std::move(poFeature)), m_hGEOSContext(hGEOSCtxt),
         m_poGEOSGeometry(nullptr), m_poGEOSPreparedGeometry(nullptr),
-        m_dfArea(-1.0), m_poSmallestNeighbor(nullptr),
-        m_poLargestNeighbor(nullptr), m_poLongestNeighbor(nullptr)
+        m_dfArea(-1.0)
     {
     }
 
@@ -187,45 +188,29 @@ public:
             }
 
             GEOSGeom_destroy(poIntersection);
-
-            m_poSmallestNeighbor = m_poLargestNeighbor = m_poLongestNeighbor = nullptr;
         }
     }
 
-    neighbor_t *find_neighbor(neighbor_comp_t comp)
+    neighbor_t *findNeighbor(neighbor_t::comp_t comp)
     {
         auto itr = std::min_element(m_lstNeighbors.begin(), m_lstNeighbors.end(), comp);
         return itr != m_lstNeighbors.end() ? &*itr : nullptr;
     }
 
-    neighbor_t *smallestNeighbor()
+    neighbor_t *findNeighbor(EliminateMergeType eMergeType)
     {
-        if (m_poSmallestNeighbor == nullptr)
+        switch (eMergeType)
         {
-            auto smaller = [](const neighbor_t &a, const neighbor_t &b) { return a.poCreature->area() < b.poCreature->area(); };
-            m_poSmallestNeighbor = find_neighbor(smaller);
-        }
-        return m_poSmallestNeighbor;
-    }
+            default:
+            case ELIMINATE_MERGE_LARGEST_AREA:
+                return findNeighbor(neighbor_t::larger);
 
-    neighbor_t *largestNeighbor()
-    {
-        if (m_poLargestNeighbor == nullptr)
-        {
-            auto bigger = [](const neighbor_t &a, const neighbor_t &b) { return a.poCreature->area() >= b.poCreature->area(); };
-            m_poLargestNeighbor = find_neighbor(bigger);
-        }
-        return m_poLargestNeighbor;
-    }
+            case ELIMINATE_MERGE_SMALLEST_AREA:
+                return findNeighbor(neighbor_t::smaller);
 
-    neighbor_t *longestNeighbor()
-    {
-        if (m_poLongestNeighbor == nullptr)
-        {
-            auto longer = [](const neighbor_t &a, const neighbor_t &b) { return a.dfLength >= b.dfLength; };
-            m_poLongestNeighbor = find_neighbor(longer);
+            case ELIMINATE_MERGE_LONGEST_BOUNDARY:
+                return findNeighbor(neighbor_t::longer);
         }
-        return m_poLongestNeighbor;
     }
 
     void addCreatureToMerge(FeatureCreature *poCreature)
@@ -255,6 +240,7 @@ EliminateOptions *EliminateOptionsNew()
     psOptions->pszDstLayerName = nullptr;
     psOptions->pszFormat = nullptr;
     psOptions->pszWhere = nullptr;
+    psOptions->eMergeType = ELIMINATE_MERGE_LARGEST_AREA;
     return psOptions;
 }
 
@@ -307,7 +293,7 @@ OGRErr EliminatePolygonsWithOptions(EliminateOptions *psOptions)
     GDALDatasetH hSrcDS = GDALOpenEx(psOptions->pszSrcFilename, nFlags, nullptr, nullptr, nullptr);
     if (hSrcDS != nullptr)
     {
-        GDALDatasetH hDstDS = reinterpret_cast<GDALDatasetH>(OGR_Dr_CreateDataSource(hDriver, psOptions->pszDstFilename, /* DSCO */ nullptr));
+        GDALDatasetH hDstDS = reinterpret_cast<GDALDatasetH>(OGR_Dr_CreateDataSource(hDriver, psOptions->pszDstFilename, nullptr));
         if (hDstDS != nullptr)
         {
             eErr = EliminatePolygonsWithOptionsEx(hSrcDS, psOptions->pszSrcLayerName, hDstDS,  psOptions->pszDstLayerName, psOptions);
@@ -407,13 +393,13 @@ OGRErr EliminatePolygonsWithOptionsEx(GDALDatasetH hSrcDS, const char *pszSrcLay
             }
         }
 
-        return EliminatePolygonsByQuery(OGRLayer::ToHandle(poSrcLayer), OGRLayer::ToHandle(poDstLayer), osWhere);
+        return EliminatePolygonsByQuery(OGRLayer::ToHandle(poSrcLayer), OGRLayer::ToHandle(poDstLayer), psOptions->eMergeType, osWhere);
     }
 
     return OGRERR_UNSUPPORTED_OPERATION;
 }
 
-OGRErr EliminatePolygonsByQuery(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, const char *pszWhere)
+OGRErr EliminatePolygonsByQuery(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, EliminateMergeType eMergeType, const char *pszWhere)
 {
     if (pszWhere == nullptr || strlen(pszWhere) == 0)
     {
@@ -423,6 +409,7 @@ OGRErr EliminatePolygonsByQuery(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, const 
 
     OGRLayer *poSrcLayer = OGRLayer::FromHandle(hSrcLayer);
 
+    // FIXME: This does not fail with bad WHERE statements.
     OGRErr eErr = poSrcLayer->SetAttributeFilter(pszWhere);
 
     if (eErr != OGRERR_NONE)
@@ -430,22 +417,37 @@ OGRErr EliminatePolygonsByQuery(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, const 
         return eErr;
     }
 
-    CPLStringList aosFIDs;
-
+    std::vector<GIntBig> vecFIDsToEliminate;
     for (auto &poFeature : poSrcLayer)
     {
-        CPLString sFID = std::to_string(poFeature->GetFID());
-        aosFIDs.AddString(sFID);
+        GIntBig nFID = poFeature->GetFID();
+        vecFIDsToEliminate.push_back(nFID);
     }
 
-    poSrcLayer->SetAttributeFilter(nullptr);
+    eErr = poSrcLayer->SetAttributeFilter(nullptr);
 
-    eErr = EliminatePolygonsByFID(hSrcLayer, hDstLayer, aosFIDs);
+    if (eErr != OGRERR_NONE)
+    {
+        return eErr;
+    }
 
-    return eErr;
+    return EliminatePolygonsByFID(hSrcLayer, hDstLayer, eMergeType, vecFIDsToEliminate.data(), vecFIDsToEliminate.size());
 }
 
-OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **papszEliminateFIDs)
+OGRErr EliminatePolygonsByFIDStrList(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, EliminateMergeType eMergeType, char **papszEliminateFIDs)
+{
+    std::vector<GIntBig> vecFIDsToEliminate;
+    for (int i = 0, n = CSLCount(papszEliminateFIDs); i < n; i++)
+    {
+        const char *pszFID = papszEliminateFIDs[i];
+        GIntBig nFID =  CPLAtoFID(pszFID);
+        vecFIDsToEliminate.push_back(nFID);
+    }
+
+    return EliminatePolygonsByFID(hSrcLayer, hDstLayer, eMergeType, vecFIDsToEliminate.data(), vecFIDsToEliminate.size());
+}
+
+OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, EliminateMergeType eMergeType, GIntBig *panEliminateFIDs , int nCount)
 {
     int nMajor, nMinor, nPatch;
     bool bHaveGEOS = OGRGetGEOSVersion(&nMajor, &nMinor, &nPatch);
@@ -459,20 +461,13 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
     OGRLayer *poSrcLayer = OGRLayer::FromHandle(hSrcLayer);
     OGRLayer *poDstLayer = OGRLayer::FromHandle(hDstLayer);
 
-    // Eliminate the features in the order they're given, since it
-    // may affect the selection of the feature each is merged with.
-    //
-    std::list<GIntBig> lstFIDsToEliminate;
     std::unordered_set<GIntBig> setFIDsToEliminate;
-
-    for (int i = 0, n = CSLCount(papszEliminateFIDs); i < n; i++)
+    for (int i = 0; i < nCount; i++)
     {
-        const char *pszFID = papszEliminateFIDs[i];
-        GIntBig nFID =  CPLAtoFID(pszFID);
-        if (nFID != OGRNullFID && setFIDsToEliminate.find(nFID) == setFIDsToEliminate.end())
+        GIntBig nFID = panEliminateFIDs[i];
+        if (nFID >= 0)
         {
             setFIDsToEliminate.insert(nFID);
-            lstFIDsToEliminate.push_back(nFID);
         }
     }
 
@@ -530,8 +525,7 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
             std::list<FeatureCreature *> *plstpoNeighbors;
         };
         capture_t capture = {poCreature, &lstpoNeighbors};
-
-        auto callback = [](void *poItem, void *poUserData) {
+        GEOSQueryCallback callback = [](void *poItem, void *poUserData) {
             auto poNeighbor = static_cast<FeatureCreature *>(poItem);
             auto poCapture = static_cast<capture_t *>(poUserData);
             if (poCapture->poCreature != poNeighbor)
@@ -553,7 +547,7 @@ OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, char **p
             poCreature->addNeighborIfTouching(poNeighbor);
         }
 
-        FeatureCreature::neighbor_t *poNeighbor = poCreature->longestNeighbor();
+        FeatureCreature::neighbor_t *poNeighbor = poCreature->findNeighbor(eMergeType);
 
         if (poNeighbor == nullptr)
         {

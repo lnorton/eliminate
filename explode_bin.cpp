@@ -53,16 +53,45 @@ struct ExplodeOptions
     }
 };
 
-static int ExplodeCmdLineProcessor(int nArgc, char **papszArgv, ExplodeOptions *psOptions)
+static void PrintUsage(const char *pszErrorMessage = nullptr)
+{
+    std::cerr << "explode [-f <formatname>] <src_filename> <dst_filename>" << std::endl;
+    if (pszErrorMessage != nullptr)
+    {
+        std::cerr << "FAILURE: " << pszErrorMessage << std::endl;
+    }
+}
+
+static bool HasEnoughAdditionalArgs(char **papszArgv, int i, int nArgc, int nExtraArgs)
+{
+    if (i + nExtraArgs >= nArgc)
+    {
+        PrintUsage(CPLSPrintf("%s option requires %d argument(s)", papszArgv[i], nExtraArgs));
+        return false;
+    }
+    else
+    {
+        return true;
+    }
+}
+
+static OGRErr ExplodeCmdLineProcessor(int nArgc, char **papszArgv, ExplodeOptions *psOptions)
 {
     const char *pszSrcFilename = nullptr;
     const char *pszDstFilename = nullptr;
     const char *pszFormat = nullptr;
-    char **papszDSCO = nullptr;
 
     for (int i = 1; i < nArgc; ++i)
     {
-        if (pszSrcFilename == nullptr)
+        if (EQUAL(papszArgv[i], "-f"))
+        {
+            if (!HasEnoughAdditionalArgs(papszArgv, i, nArgc, 1))
+            {
+                return OGRERR_FAILURE;
+            }
+            pszFormat = papszArgv[++i];
+        }
+        else if (pszSrcFilename == nullptr)
         {
             pszSrcFilename = papszArgv[i];
         }
@@ -70,16 +99,30 @@ static int ExplodeCmdLineProcessor(int nArgc, char **papszArgv, ExplodeOptions *
         {
             pszDstFilename = papszArgv[i];
         }
+        else
+        {
+            PrintUsage("Too many command options.");
+            return OGRERR_FAILURE;
+        }
     }
 
-    if (pszSrcFilename != nullptr && pszDstFilename != nullptr)
+    if (pszSrcFilename != nullptr)
     {
         psOptions->pszSrcFilename = CPLStrdup(pszSrcFilename);
+    }
+    else
+    {
+        PrintUsage("Missing source filename.");
+        return OGRERR_FAILURE;
+    }
+
+    if (pszDstFilename != nullptr)
+    {
         psOptions->pszDstFilename = CPLStrdup(pszDstFilename);
     }
     else
     {
-        CPLError(CE_Failure, CPLE_AppDefined, "Forget something?");
+        PrintUsage("Missing destination filename.");
         return OGRERR_FAILURE;
     }
 
@@ -107,47 +150,34 @@ static int ExplodeCmdLineProcessor(int nArgc, char **papszArgv, ExplodeOptions *
         }
     }
 
-    return EXIT_SUCCESS;
+    return OGRERR_NONE;
 }
 
-static int ExplodeBinary(ExplodeOptions *psOptions)
+static OGRErr ExplodeBinary(ExplodeOptions *psOptions)
 {
     OGRSFDriverH hDriver = OGRGetDriverByName(psOptions->pszFormat);
     if (hDriver == nullptr)
     {
         CPLError(CE_Failure, CPLE_AppDefined, "Unable to find format driver named %s.", psOptions->pszFormat);
-        return EXIT_FAILURE;
+        return OGRERR_FAILURE;
     }
 
-    int nExitStatus = EXIT_FAILURE;
+    OGRErr eErr = OGRERR_FAILURE;
 
     int nFlags = GDAL_OF_VECTOR | GDAL_OF_READONLY | GDAL_OF_VERBOSE_ERROR;
     GDALDatasetH hSrcDS = GDALOpenEx(psOptions->pszSrcFilename, nFlags, nullptr, nullptr, nullptr);
     if (hSrcDS != nullptr)
     {
-        GDALDatasetH hDstDS = reinterpret_cast<GDALDatasetH>(OGR_Dr_CreateDataSource(hDriver, psOptions->pszDstFilename, /* DSCO */ nullptr));
+        GDALDatasetH hDstDS = reinterpret_cast<GDALDatasetH>(OGR_Dr_CreateDataSource(hDriver, psOptions->pszDstFilename, nullptr));
         if (hDstDS != nullptr)
         {
-            OGRErr eErr = Explode(hSrcDS, psOptions->pszSrcLayerName, hDstDS, psOptions->pszDstLayerName);
-            if (eErr == OGRERR_NONE)
-            {
-                nExitStatus = EXIT_SUCCESS;
-            }
+            eErr = Explode(hSrcDS, psOptions->pszSrcLayerName, hDstDS, psOptions->pszDstLayerName);
             GDALClose(hDstDS);
         }
         GDALClose(hSrcDS);
     }
 
-    return nExitStatus;
-}
-
-static void PrintUsage(const char *pszErrorMessage = nullptr)
-{
-    std::cerr << "explode <src_filename> <dst_filename>" << std::endl;
-    if (pszErrorMessage != nullptr)
-    {
-        std::cerr << "FAILURE: " << pszErrorMessage << std::endl;
-    }
+    return eErr;
 }
 
 MAIN_START(argc, argv)
@@ -166,14 +196,14 @@ MAIN_START(argc, argv)
     else
     {
         ExplodeOptions *psOptions = new ExplodeOptions;
-        nExitStatus = ExplodeCmdLineProcessor(nArgc, papszArgv, psOptions);
-        if (nExitStatus != EXIT_SUCCESS)
+        OGRErr eErr = ExplodeCmdLineProcessor(nArgc, papszArgv, psOptions);
+        if (eErr == OGRERR_NONE)
         {
-            PrintUsage();
-        }
-        else
-        {
-            nExitStatus = ExplodeBinary(psOptions);
+            eErr = ExplodeBinary(psOptions);
+            if (eErr == OGRERR_NONE)
+            {
+                nExitStatus = EXIT_SUCCESS;
+            }
         }
         delete psOptions;
     }

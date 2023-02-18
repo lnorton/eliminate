@@ -30,16 +30,63 @@
 #include "eliminate.h"
 
 
-static int EliminatePolygonsCmdLineProcessor(int nArgc, char **papszArgv, EliminateOptions *psOptions)
+static void PrintUsage(const char *pszErrorMessage = nullptr)
+{
+    std::cerr << "eliminate [-min <min_area> | -where <filter>] [-f <formatname>] <src_filename> <dst_filename>" << std::endl;
+    if (pszErrorMessage != nullptr)
+    {
+        std::cerr << "FAILURE: " << pszErrorMessage << std::endl;
+    }
+}
+
+static bool HasEnoughAdditionalArgs(char **papszArgv, int i, int nArgc, int nExtraArgs)
+{
+    if (i + nExtraArgs >= nArgc)
+    {
+        PrintUsage(CPLSPrintf("%s option requires %d argument(s)", papszArgv[i], nExtraArgs));
+        return false;
+    }
+    else
+    {
+        return true;
+    }
+}
+
+static OGRErr EliminatePolygonsCmdLineProcessor(int nArgc, char **papszArgv, EliminateOptions *psOptions)
 {
     const char *pszSrcFilename = nullptr;
     const char *pszDstFilename = nullptr;
     const char *pszFormat = nullptr;
-    char **papszDSCO = nullptr;
+    const char *pszWhere = nullptr;
+    const char *pszMin = nullptr;
 
     for (int i = 1; i < nArgc; ++i)
     {
-        if (pszSrcFilename == nullptr)
+        if (EQUAL(papszArgv[i], "-f"))
+        {
+            if (!HasEnoughAdditionalArgs(papszArgv, i, nArgc, 1))
+            {
+                return OGRERR_FAILURE;
+            }
+            pszFormat = papszArgv[++i];
+        }
+        else if (EQUAL(papszArgv[i], "-where"))
+        {
+            if (!HasEnoughAdditionalArgs(papszArgv, i, nArgc, 1))
+            {
+                return OGRERR_FAILURE;
+            }
+            pszWhere = papszArgv[++i];
+        }
+        else if (EQUAL(papszArgv[i], "-min"))
+        {
+            if (!HasEnoughAdditionalArgs(papszArgv, i, nArgc, 1))
+            {
+                return OGRERR_FAILURE;
+            }
+            pszMin = papszArgv[++i];
+        }
+        else if (pszSrcFilename == nullptr)
         {
             pszSrcFilename = papszArgv[i];
         }
@@ -47,16 +94,42 @@ static int EliminatePolygonsCmdLineProcessor(int nArgc, char **papszArgv, Elimin
         {
             pszDstFilename = papszArgv[i];
         }
+        else
+        {
+            PrintUsage("Too many command options.");
+            return OGRERR_FAILURE;
+        }
     }
 
-    if (pszSrcFilename != nullptr && pszDstFilename != nullptr)
+    if (pszSrcFilename != nullptr)
     {
         psOptions->pszSrcFilename = CPLStrdup(pszSrcFilename);
+    }
+    else
+    {
+        PrintUsage("Missing source filename.");
+        return OGRERR_FAILURE;
+    }
+
+    if (pszDstFilename != nullptr)
+    {
         psOptions->pszDstFilename = CPLStrdup(pszDstFilename);
     }
     else
     {
-        CPLError(CE_Failure, CPLE_AppDefined, "Forget something?");
+        PrintUsage("Missing destination filename.");
+        return OGRERR_FAILURE;
+    }
+
+    if (pszWhere != nullptr && pszMin != nullptr)
+    {
+        PrintUsage("Cannot use '-min' with '-where'.");
+        return OGRERR_FAILURE;
+    }
+
+    if (pszWhere == nullptr && pszMin == nullptr)
+    {
+        PrintUsage("Must specify '-min' or '-where'.");
         return OGRERR_FAILURE;
     }
 
@@ -84,18 +157,23 @@ static int EliminatePolygonsCmdLineProcessor(int nArgc, char **papszArgv, Elimin
         }
     }
 
-    psOptions->pszWhere = CPLStrdup("OGR_GEOM_AREA < 0.005");
-
-    return EXIT_SUCCESS;
-}
-
-static void PrintUsage(const char *pszErrorMessage = nullptr)
-{
-    std::cerr << "eliminate <src_filename> <dst_filename>" << std::endl;
-    if (pszErrorMessage != nullptr)
+    if (pszMin != nullptr)
     {
-        std::cerr << "FAILURE: " << pszErrorMessage << std::endl;
+        double dfMin = CPLAtofM(pszMin);
+        if (dfMin <= 0.0)
+        {
+            CPLError(CE_Failure, CPLE_AppDefined, "Invalid value for -min: %s", pszMin);
+            return OGRERR_FAILURE;
+        }
+        CPLString osWhere = CPLOPrintf("OGR_GEOM_AREA < %f", dfMin);
+        psOptions->pszWhere = CPLStrdup(osWhere.c_str());
     }
+    else
+    {
+        psOptions->pszWhere = CPLStrdup(pszWhere);
+    }
+
+    return OGRERR_NONE;
 }
 
 MAIN_START(argc, argv)
@@ -114,15 +192,14 @@ MAIN_START(argc, argv)
     else
     {
         EliminateOptions *psOptions = EliminateOptionsNew();
-        nExitStatus = EliminatePolygonsCmdLineProcessor(nArgc, papszArgv, psOptions);
-        if (nExitStatus != EXIT_SUCCESS)
+        OGRErr eErr = EliminatePolygonsCmdLineProcessor(nArgc, papszArgv, psOptions);
+        if (eErr == OGRERR_NONE)
         {
-            PrintUsage();
-        }
-        else
-        {
-            OGRErr eErr = EliminatePolygonsWithOptions(psOptions);
-            nExitStatus = eErr == OGRERR_NONE ? EXIT_SUCCESS : EXIT_FAILURE;
+            eErr = EliminatePolygonsWithOptions(psOptions);
+            if (eErr == OGRERR_NONE)
+            {
+                nExitStatus = EXIT_SUCCESS;
+            }
         }
         EliminateOptionsFree(psOptions);
     }
