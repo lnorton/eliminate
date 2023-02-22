@@ -50,7 +50,7 @@ EliminateOptions *EliminateOptionsNew();
 void EliminateOptionsFree(EliminateOptions *psOptions);
 
 OGRErr EliminatePolygonsWithOptions(EliminateOptions *psOptions);
-OGRErr EliminatePolygonsWithOptionsEx(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hDstDS, const char *pszDstLayerName, EliminateOptions *psOptions);
+OGRErr EliminatePolygons(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hDstDS, const char *pszDstLayerName, EliminateMergeType eMergeType, const char *pszWhere);
 OGRErr EliminatePolygonsByQuery(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, EliminateMergeType eMergeType, const char *pszWhere);
 OGRErr EliminatePolygonsByFIDStrList(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, EliminateMergeType eMergeType, char **papszEliminateFIDs);
 OGRErr EliminatePolygonsByFID(OGRLayerH hSrcLayer, OGRLayerH hDstLayer, EliminateMergeType eMergeType, GIntBig *panEliminateFIDs, int nCount);

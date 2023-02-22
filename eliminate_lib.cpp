@@ -199,18 +199,20 @@ public:
 
     neighbor_t *findNeighbor(EliminateMergeType eMergeType)
     {
+        neighbor_t::comp_t comp;
         switch (eMergeType)
         {
             default:
             case ELIMINATE_MERGE_LARGEST_AREA:
-                return findNeighbor(neighbor_t::larger);
+                comp = neighbor_t::larger;
 
             case ELIMINATE_MERGE_SMALLEST_AREA:
-                return findNeighbor(neighbor_t::smaller);
+                comp = neighbor_t::smaller;
 
             case ELIMINATE_MERGE_LONGEST_BOUNDARY:
-                return findNeighbor(neighbor_t::longer);
+                comp = neighbor_t::longer;
         }
+        return findNeighbor(comp);
     }
 
     void addCreatureToMerge(FeatureCreature *poCreature)
@@ -296,7 +298,7 @@ OGRErr EliminatePolygonsWithOptions(EliminateOptions *psOptions)
         GDALDatasetH hDstDS = reinterpret_cast<GDALDatasetH>(OGR_Dr_CreateDataSource(hDriver, psOptions->pszDstFilename, nullptr));
         if (hDstDS != nullptr)
         {
-            eErr = EliminatePolygonsWithOptionsEx(hSrcDS, psOptions->pszSrcLayerName, hDstDS,  psOptions->pszDstLayerName, psOptions);
+            eErr = EliminatePolygons(hSrcDS, psOptions->pszSrcLayerName, hDstDS,  psOptions->pszDstLayerName, psOptions->eMergeType, psOptions->pszWhere);
             GDALClose(hDstDS);
         }
         GDALClose(hSrcDS);
@@ -305,7 +307,7 @@ OGRErr EliminatePolygonsWithOptions(EliminateOptions *psOptions)
     return eErr;
 }
 
-OGRErr EliminatePolygonsWithOptionsEx(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hDstDS, const char *pszDstLayerName, EliminateOptions *psOptions)
+OGRErr EliminatePolygons(GDALDatasetH hSrcDS, const char *pszSrcLayerName, GDALDatasetH hDstDS, const char *pszDstLayerName, EliminateMergeType eMergeType, const char *pszWhere)
 {
     GDALDataset *poSrcDS = GDALDataset::FromHandle(hSrcDS);
     GDALDataset *poDstDS = GDALDataset::FromHandle(hDstDS);
@@ -373,9 +375,9 @@ OGRErr EliminatePolygonsWithOptionsEx(GDALDatasetH hSrcDS, const char *pszSrcLay
         }
     }
 
-    if (psOptions->pszWhere != nullptr)
+    if (pszWhere != nullptr)
     {
-        CPLString osWhere = psOptions->pszWhere;
+        CPLString osWhere = pszWhere;
 
         // There seems to be no way to force it into the OGRSQL dialect,
         // so kludge the where clause to keep it from blowing up.
@@ -393,7 +395,7 @@ OGRErr EliminatePolygonsWithOptionsEx(GDALDatasetH hSrcDS, const char *pszSrcLay
             }
         }
 
-        return EliminatePolygonsByQuery(OGRLayer::ToHandle(poSrcLayer), OGRLayer::ToHandle(poDstLayer), psOptions->eMergeType, osWhere);
+        return EliminatePolygonsByQuery(OGRLayer::ToHandle(poSrcLayer), OGRLayer::ToHandle(poDstLayer), eMergeType, osWhere);
     }
 
     return OGRERR_UNSUPPORTED_OPERATION;

@@ -55,7 +55,7 @@ struct ExplodeOptions
 
 static void PrintUsage(const char *pszErrorMessage = nullptr)
 {
-    std::cerr << "explode [-f <formatname>] <src_filename> <dst_filename>" << std::endl;
+    std::cerr << "explode [-f <formatname>] <src_filename> [-l <src_layer>] <dst_filename> [-l <dst_layer>]" << std::endl;
     if (pszErrorMessage != nullptr)
     {
         std::cerr << "FAILURE: " << pszErrorMessage << std::endl;
@@ -78,18 +78,56 @@ static bool HasEnoughAdditionalArgs(char **papszArgv, int i, int nArgc, int nExt
 static OGRErr ExplodeCmdLineProcessor(int nArgc, char **papszArgv, ExplodeOptions *psOptions)
 {
     const char *pszSrcFilename = nullptr;
+    const char *pszSrcLayerName = nullptr;
     const char *pszDstFilename = nullptr;
+    const char *pszDstLayerName = nullptr;
     const char *pszFormat = nullptr;
 
     for (int i = 1; i < nArgc; ++i)
     {
-        if (EQUAL(papszArgv[i], "-f"))
+        if (EQUAL(papszArgv[i], "-f") || EQUAL(papszArgv[i], "-format"))
         {
             if (!HasEnoughAdditionalArgs(papszArgv, i, nArgc, 1))
             {
                 return OGRERR_FAILURE;
             }
             pszFormat = papszArgv[++i];
+        }
+        else if (EQUAL(papszArgv[i], "-l") || EQUAL(papszArgv[i], "-layer"))
+        {
+            if (!HasEnoughAdditionalArgs(papszArgv, i, nArgc, 1))
+            {
+                return OGRERR_FAILURE;
+            }
+            else if (pszSrcFilename != nullptr && pszDstFilename == nullptr)
+            {
+                if (pszSrcLayerName == nullptr)
+                {
+                    pszSrcLayerName = papszArgv[++i];
+                }
+                else
+                {
+                    PrintUsage("Source layer already specified.");
+                    return OGRERR_FAILURE;
+                }
+            }
+            else if (pszDstFilename != nullptr)
+            {
+                if (pszDstLayerName == nullptr)
+                {
+                    pszDstLayerName = papszArgv[++i];
+                }
+                else
+                {
+                    PrintUsage("Destination layer already specified.");
+                    return OGRERR_FAILURE;
+                }
+            }
+            else
+            {
+                PrintUsage("Layer must follow source or destination filename.");
+                return OGRERR_FAILURE;
+            }
         }
         else if (pszSrcFilename == nullptr)
         {
@@ -124,6 +162,16 @@ static OGRErr ExplodeCmdLineProcessor(int nArgc, char **papszArgv, ExplodeOption
     {
         PrintUsage("Missing destination filename.");
         return OGRERR_FAILURE;
+    }
+
+    if (pszSrcLayerName != nullptr)
+    {
+        psOptions->pszSrcLayerName = CPLStrdup(pszSrcLayerName);
+    }
+
+    if (pszDstLayerName != nullptr)
+    {
+        psOptions->pszDstLayerName = CPLStrdup(pszDstLayerName);
     }
 
     if (pszFormat != nullptr)
